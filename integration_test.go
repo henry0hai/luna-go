@@ -476,6 +476,58 @@ func TestContextTimeout(t *testing.T) {
 	}
 }
 
+func TestPing(t *testing.T) {
+	db := openDB(t)
+	defer db.Close()
+
+	// Test basic ping
+	err := db.Ping()
+	if err != nil {
+		t.Fatalf("Ping failed: %v", err)
+	}
+	t.Log("✓ Basic ping successful")
+
+	// Test ping with context
+	ctx := context.Background()
+	err = db.PingContext(ctx)
+	if err != nil {
+		t.Fatalf("PingContext failed: %v", err)
+	}
+	t.Log("✓ Ping with context successful")
+
+	// Test ping with timeout context
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err = db.PingContext(ctx)
+	if err != nil {
+		t.Fatalf("PingContext with timeout failed: %v", err)
+	}
+	t.Log("✓ Ping with timeout context successful")
+
+	// Test multiple pings
+	for i := 0; i < 5; i++ {
+		err = db.Ping()
+		if err != nil {
+			t.Fatalf("Ping %d failed: %v", i+1, err)
+		}
+	}
+	t.Log("✓ Multiple pings successful")
+}
+
+func TestPingClosedConnection(t *testing.T) {
+	db := openDB(t)
+
+	// Close the connection
+	db.Close()
+
+	// Ping should fail on closed connection
+	err := db.Ping()
+	if err == nil {
+		t.Fatal("Expected error when pinging closed connection, got nil")
+	}
+	t.Logf("✓ Ping correctly failed on closed connection: %v", err)
+}
+
 func TestPreparedStatement(t *testing.T) {
 	db := openDB(t)
 	defer db.Close()

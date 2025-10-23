@@ -105,15 +105,25 @@ func (c *Conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 	return newRowsFromArrow(records), nil
 }
 
-// TODO: Implements the driver.Pinger interface.
+// Ping implements the driver.Pinger interface.
+// It verifies the connection to Luna server is still alive.
 func (c *Conn) Ping(ctx context.Context) error {
 	if c.closed {
 		return driver.ErrBadConn
 	}
 
-	// Simple ping query
-	_, err := c.QueryContext(ctx, "SELECT 1", nil)
-	return err
+	// Execute a simple query to verify the connection
+	rows, err := c.QueryContext(ctx, "SELECT 1", nil)
+	if err != nil {
+		return err
+	}
+
+	// Close the rows to release resources
+	if rows != nil {
+		rows.Close()
+	}
+
+	return nil
 }
 
 // Implements the driver.Conn interface.
