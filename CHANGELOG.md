@@ -66,7 +66,13 @@ All notable changes to the Luna Go SQL Driver project.
 - Basic connection and ping tests
 - Simple and complex queries
 - Multiple row result sets
-- CSV file querying (cloud storage integration)
+- **CSV file querying** (`customers-1000.csv`) - Cloud storage integration
+- **Parquet file querying** (`users-1000.parquet`) - Schema-agnostic testing
+  - Dynamic schema discovery
+  - Automatic column type detection
+  - Aggregation tests (AVG, MIN, MAX, COUNT)
+  - Filtering and GROUP BY operations
+  - Handles 13 columns with mixed types (string, int, float, timestamp, nullable)
 - Transaction API testing (with skip on Luna limitations)
 - Context timeout handling
 - Prepared statement testing

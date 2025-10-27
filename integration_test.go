@@ -341,6 +341,245 @@ func TestCSVQuery(t *testing.T) {
 	}
 }
 
+func TestParquetQuery(t *testing.T) {
+	db := openDB(t)
+	defer db.Close()
+
+	// Try mounted path first (for Docker), then local path
+	parquetPaths := []string{
+		"/tests/users-1000.parquet", // Docker mounted path
+		"tests/users-1000.parquet",  // Local relative path
+		filepath.Join(os.Getenv("HOME"), "Projects/Work/Alphaus/luna-go/tests/users-1000.parquet"), // Absolute path
+	}
+
+	var parquetPath string
+	var foundPath bool
+
+	// Test each path to see which one Luna server can access
+	for _, path := range parquetPaths {
+		query := fmt.Sprintf("SELECT COUNT(*) as total FROM read_parquet('%s')", path)
+		rows, err := db.Query(query)
+		if err != nil {
+			continue
+		}
+		defer rows.Close()
+
+		// Check if Luna returned error format
+		cols, _ := rows.Columns()
+		if len(cols) == 2 && cols[0] == "input" && cols[1] == "error" {
+			rows.Close()
+			continue
+		}
+
+		// Found a working path
+		parquetPath = path
+		foundPath = true
+		rows.Close()
+		break
+	}
+
+	if !foundPath {
+		// None of the paths worked - log helpful message
+		t.Logf("⚠️ Parquet file not accessible to Luna server")
+		t.Logf("    Tried paths:")
+		for _, path := range parquetPaths {
+			t.Logf("      - %s", path)
+		}
+		t.Logf("")
+		t.Logf("    If using Docker, mount the tests directory:")
+		t.Logf("    volumes:")
+		t.Logf("      - ./tests:/tests:ro")
+		t.Logf("")
+		t.Logf("    Then Parquet will be accessible at /tests/users-1000.parquet")
+		t.Skip("Skipping test - Parquet file not accessible to Luna server process")
+	}
+
+	t.Logf("✓ Using Parquet path: %s", parquetPath)
+
+	// Test 1: Count total records
+	query := fmt.Sprintf("SELECT COUNT(*) as total FROM read_parquet('%s')", parquetPath)
+
+	var total int64
+	err := db.QueryRow(query).Scan(&total)
+	if err != nil {
+		t.Fatalf("failed to count records: %v", err)
+	}
+
+	if total != 1000 {
+		t.Errorf("expected 1000 records, got %d", total)
+	}
+	t.Logf("✓ Parquet file contains %d records", total)
+
+	// Test 2: Discover schema first
+	query = fmt.Sprintf("SELECT * FROM read_parquet('%s') LIMIT 1", parquetPath)
+	rows, err := db.Query(query)
+	if err != nil {
+		t.Fatalf("failed to query Parquet schema: %v", err)
+	}
+
+	columns, err := rows.Columns()
+	if err != nil {
+		rows.Close()
+		t.Fatalf("failed to get columns: %v", err)
+	}
+	rows.Close()
+
+	t.Logf("✓ Parquet file schema: %v", columns)
+	numCols := len(columns)
+
+	// Test 3: Query specific records with actual columns
+	query = fmt.Sprintf(`
+		SELECT * 
+		FROM read_parquet('%s') 
+		LIMIT 5
+	`, parquetPath)
+
+	rows, err = db.Query(query)
+	if err != nil {
+		t.Fatalf("failed to query Parquet: %v", err)
+	}
+	defer rows.Close()
+
+	count := 0
+	for rows.Next() {
+		// Create a slice to hold all column values
+		values := make([]interface{}, numCols)
+		valuePtrs := make([]interface{}, numCols)
+		for i := range values {
+			valuePtrs[i] = &values[i]
+		}
+
+		if err := rows.Scan(valuePtrs...); err != nil {
+			t.Fatalf("failed to scan row: %v", err)
+		}
+
+		// Log the row data
+		rowData := make(map[string]interface{})
+		for i, col := range columns {
+			rowData[col] = values[i]
+		}
+		t.Logf("Row %d: %+v", count+1, rowData)
+		count++
+	}
+
+	if count != 5 {
+		t.Errorf("expected 5 rows, got %d", count)
+	}
+
+	// Test 4: Check if we have numeric columns for aggregation
+	hasNumericCol := false
+	var numericCol string
+	for _, col := range columns {
+		// Common numeric column names
+		if col == "age" || col == "id" || col == "value" || col == "amount" || col == "count" {
+			hasNumericCol = true
+			numericCol = col
+			break
+		}
+	}
+
+	if !hasNumericCol {
+		t.Log("⚠️  No common numeric columns found for aggregation tests, skipping aggregations")
+		return
+	}
+
+	// Test 5: Aggregation query on numeric column
+	query = fmt.Sprintf(`
+		SELECT 
+			COUNT(*) as total_records,
+			AVG(%s) as avg_value,
+			MIN(%s) as min_value,
+			MAX(%s) as max_value
+		FROM read_parquet('%s')
+	`, numericCol, numericCol, numericCol, parquetPath)
+
+	var totalRecords int
+	var avgValue, minValue, maxValue float64
+	err = db.QueryRow(query).Scan(&totalRecords, &avgValue, &minValue, &maxValue)
+	if err != nil {
+		t.Fatalf("failed to query aggregation: %v", err)
+	}
+
+	t.Logf("Parquet Statistics (column: %s):", numericCol)
+	t.Logf("  Total Records: %d", totalRecords)
+	t.Logf("  Average: %.2f", avgValue)
+	t.Logf("  Range: %.2f - %.2f", minValue, maxValue)
+
+	if totalRecords != 1000 {
+		t.Errorf("expected 1000 total records, got %d", totalRecords)
+	}
+
+	// Test 6: Filtering on Parquet data
+	query = fmt.Sprintf(`
+		SELECT COUNT(*) as filtered_count
+		FROM read_parquet('%s')
+		WHERE %s >= %f
+	`, parquetPath, numericCol, avgValue)
+
+	var filteredCount int
+	err = db.QueryRow(query).Scan(&filteredCount)
+	if err != nil {
+		t.Fatalf("failed to query filtered data: %v", err)
+	}
+
+	t.Logf("  Records with %s >= %.2f: %d", numericCol, avgValue, filteredCount)
+
+	// Test 7: Check if we have a string column for grouping
+	hasStringCol := false
+	var stringCol string
+	for _, col := range columns {
+		// Common string column names (avoiding numeric columns)
+		if col == "name" || col == "email" || col == "country" || col == "city" || col == "category" || col == "status" {
+			hasStringCol = true
+			stringCol = col
+			break
+		}
+	}
+
+	if !hasStringCol {
+		t.Log("✓ No common string columns found for GROUP BY test, skipping")
+		return
+	}
+
+	// Test 8: GROUP BY query on string column
+	query = fmt.Sprintf(`
+		SELECT 
+			%s,
+			COUNT(*) as count
+		FROM read_parquet('%s')
+		GROUP BY %s
+		ORDER BY count DESC
+		LIMIT 10
+	`, stringCol, parquetPath, stringCol)
+
+	rows, err = db.Query(query)
+	if err != nil {
+		t.Fatalf("failed to query groups: %v", err)
+	}
+	defer rows.Close()
+
+	t.Logf("Top 10 values by %s:", stringCol)
+	groupCount := 0
+	for rows.Next() {
+		var groupValue string
+		var count int
+		if err := rows.Scan(&groupValue, &count); err != nil {
+			t.Fatalf("failed to scan group row: %v", err)
+		}
+		// Truncate long strings for display
+		displayValue := groupValue
+		if len(displayValue) > 50 {
+			displayValue = displayValue[:47] + "..."
+		}
+		t.Logf("  %s: %d records", displayValue, count)
+		groupCount++
+	}
+
+	if groupCount == 0 {
+		t.Error("expected at least one group, got 0")
+	}
+}
+
 func TestTransaction(t *testing.T) {
 	db := openDB(t)
 	defer db.Close()
