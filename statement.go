@@ -3,26 +3,20 @@ package luna
 import (
 	"context"
 	"database/sql/driver"
+	"fmt"
 )
 
 type Stmt struct {
-	conn *Conn
-	// preparedStmt     *mapping.PreparedStatement
-	closeOnRowsClose bool
-	bound            bool
-	closed           bool
-	rows             bool
+	conn   *Conn
+	query  string
+	closed bool
 }
 
 // Implements the driver.Stmt interface.
 func (s *Stmt) Close() error {
-	if s.rows {
-		panic("database/sql/driver: misuse of duckdb driver: Close with active Rows")
-	}
 	if s.closed {
-		panic("database/sql/driver: misuse of duckdb driver: double Close of Stmt")
+		return fmt.Errorf("statement already closed")
 	}
-
 	s.closed = true
 	return nil
 }
@@ -30,10 +24,9 @@ func (s *Stmt) Close() error {
 // Implements the driver.Stmt interface.
 func (s *Stmt) NumInput() int {
 	if s.closed {
-		panic("database/sql/driver: misuse of duckdb driver: NumInput after Close")
+		panic("database/sql/driver: misuse of luna driver: NumInput after Close")
 	}
-
-	return 0
+	return -1 // -1 means the driver doesn't know
 }
 
 // Deprecated: Use ExecContext instead.
@@ -44,12 +37,12 @@ func (s *Stmt) Exec(args []driver.Value) (driver.Result, error) {
 // ExecContext executes a query that doesn't return rows, such as an INSERT or UPDATE.
 // It implements the driver.StmtExecContext interface.
 func (s *Stmt) ExecContext(ctx context.Context, nargs []driver.NamedValue) (driver.Result, error) {
-	err := s.execute(ctx, nargs)
-	if err != nil {
-		return nil, err
+	if s.closed {
+		return nil, fmt.Errorf("statement is closed")
 	}
 
-	return nil, nil
+	// Use the connection's ExecContext
+	return s.conn.ExecContext(ctx, s.query, nargs)
 }
 
 // Deprecated: Use QueryContext instead.
@@ -60,25 +53,12 @@ func (s *Stmt) Query(args []driver.Value) (driver.Rows, error) {
 // QueryContext executes a query that may return rows, such as a SELECT.
 // It implements the driver.StmtQueryContext interface.
 func (s *Stmt) QueryContext(ctx context.Context, nargs []driver.NamedValue) (driver.Rows, error) {
-	err := s.execute(ctx, nargs)
-	if err != nil {
-		return nil, err
-	}
-
-	s.rows = true
-	return nil, nil
-}
-
-func (s *Stmt) execute(ctx context.Context, args []driver.NamedValue) error {
 	if s.closed {
-		panic("database/sql/driver: misuse of duckdb driver: ExecContext or QueryContext after Close")
+		return nil, fmt.Errorf("statement is closed")
 	}
 
-	if s.rows {
-		panic("database/sql/driver: misuse of duckdb driver: ExecContext or QueryContext with active Rows")
-	}
-
-	return nil
+	// Use the connection's QueryContext
+	return s.conn.QueryContext(ctx, s.query, nargs)
 }
 
 func argsToNamedArgs(values []driver.Value) []driver.NamedValue {

@@ -1,9 +1,11 @@
 package luna
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/url"
@@ -47,7 +49,7 @@ func (*Connector) Driver() driver.Driver { return Driver{} }
 
 // Implements the driver.Connector interface.
 func (c *Connector) Connect(ctx context.Context) (driver.Conn, error) {
-	slog.Info("host:", "v", c.u.Host)
+	slog.Info("connecting", "host", c.u.Host)
 	var nc net.Conn
 	var err error
 	deadline, ok := ctx.Deadline()
@@ -63,10 +65,29 @@ func (c *Connector) Connect(ctx context.Context) (driver.Conn, error) {
 		}
 	}
 
-	conn := &Conn{conn: nc}
+	conn := &Conn{
+		conn:   nc,
+		reader: bufio.NewReader(nc),
+	}
+
+	// Perform authentication if password is provided
+	// Note: Luna server doesn't send anything on connection
+	// It only sends auth challenge if server has password configured
+	password := ""
+	if c.u.User != nil {
+		password, _ = c.u.User.Password()
+	}
+	if password != "" {
+		if err := authenticate(nc, password); err != nil {
+			nc.Close()
+			return nil, fmt.Errorf("authentication failed: %w", err)
+		}
+	}
+	// If no password, Luna just waits for commands - no handshake needed
 
 	if c.connInitFn != nil {
 		if err := c.connInitFn(conn); err != nil {
+			nc.Close()
 			return nil, err
 		}
 	}
@@ -86,12 +107,13 @@ func (c *Connector) Close() error {
 // The user must close the Connector, if it is not passed to the sql.OpenDB function.
 // Otherwise, sql.DB closes the Connector when calling sql.DB.Close().
 func NewConnector(dsn string, connInitFn func(execer driver.ExecerContext) error) (*Connector, error) {
+	// Ensure DSN has a scheme
 	fdsn := dsn
 	if !strings.Contains(fdsn, "://") {
-		fdsn = "http://" + fdsn
+		fdsn = "luna://" + fdsn
 	}
 
-	parsedDSN, err := url.Parse(dsn)
+	parsedDSN, err := url.Parse(fdsn)
 	if err != nil {
 		return nil, err
 	}

@@ -6,6 +6,7 @@ type tx struct {
 	c *Conn
 }
 
+// TODO: Since Luna server may not support transactions, we might need to simulate them client-side.
 // Implements the driver.Tx interface.
 func (t *tx) Commit() error {
 	if t.c == nil || !t.c.tx {
