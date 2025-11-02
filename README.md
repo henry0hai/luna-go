@@ -1,6 +1,6 @@
 [![main](https://github.com/luna-hq/luna-go/actions/workflows/main.yml/badge.svg)](https://github.com/luna-hq/luna-go/actions/workflows/main.yml)
 
-# Luna Go SQL Driver
+## Luna Go SQL Driver
 
 A Go `database/sql` driver for [Luna](https://github.com/luna-hq/luna) - a high-performance, in-memory columnar SQL server built on DuckDB and Apache Arrow.
 
